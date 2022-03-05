@@ -53,6 +53,8 @@ edx <- rbind(edx, removed)
 #remove all temp files
 rm(dl, ratings, movies, test_index, temp, movielens, removed)
 
+#save copies of the databases to local folder
+save(edx, validation, file = "MovieLens.RData")
 
 #========================================================================
 #questions and answers from quiz
@@ -105,12 +107,12 @@ edx %>%
 #========================================================================
 #check data
 
+#take a look at structure of table
+head(edx)
+
 #add year from title as potential parameter
 edx <- edx %>% mutate(year = as.numeric(str_sub(title,-5,-2)))
 validation <- validation %>% mutate(year = as.numeric(str_sub(title,-5,-2)))
-
-#take a look at structure of table
-head(edx)
 
 #check for NAs
 sum(is.na(edx$rating))
@@ -178,6 +180,16 @@ edx %>%
   summarize(rating = mean(rating)) %>%
   ggplot(aes(movieId, userId, color = rating)) +
   geom_point()
+
+#check amount of ratings per genre
+edx %>%
+  dplyr::count(genres) %>%
+  ggplot(aes(n)) +
+  geom_histogram(bins = 30) +
+  scale_x_log10() +
+  xlab("No. Genres") +
+  ylab("No. Ratings") +
+  ggtitle("Number of Ratings per Genre")
 
 #========================================================================
 #function to calculate residual mean squared error

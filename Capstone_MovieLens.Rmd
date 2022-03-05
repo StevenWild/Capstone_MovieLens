@@ -1,0 +1,257 @@
+---
+title: "Capstone Project - Movie Rating Prediction"
+author: "Steven Wild"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1  Introduction
+
+This report forms a part of the project submission for the HarvardX PH125.9x course : Data Science: Capstone.
+The aim of the project is to create a movie recommendation system, making use of the 10M version of the MovieLens dataset.
+All data was downloaded as per instruction. (Section 1.1)
+
+The report is organised into the following sections:
+  
+1. Introduction 
+     1. Data download and preparation
+2. Analysis
+     1. Data verification
+     1. Naive model
+     2. Movie effects model
+     3. User effects model
+     4. Year effects model
+     5. Genre effects model
+     6. Regularisation
+3. Results
+4. Conclusion. 
+
+The approach taken follows something similar to the one described in the data science textbook, *Introduction to Data Science* by Rafael Irizarry [link](https://www.crcpress.com/Introduction-to-Data-Science-Data-Analysis-and-Prediction-Algorithms-with/Irizarry/p/book/9780367357986)
+
+Relationships between the variables were considered and their effects were modeled in an incremental fashion to establish a final combined model. 
+The residual mean squared error or RMSE was calculated from the validation set and minimised to determine the best fit.
+
+## 1.1  Data download and preparation
+
+The code in this section was supplied as part of the assignment instruction set.
+
+```{r download and import}
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(lubridate)) install.packages("lubridate", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(data.table)
+library(lubridate)
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+if(!file.exists("MovieLens.RData"))
+  {
+  dl <- tempfile()
+  download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+  
+  ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                   col.names = c("userId", "movieId", "rating", "timestamp"))
+  
+  movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+  colnames(movies) <- c("movieId", "title", "genres")
+  
+  # if using R 4.0 or later:
+  movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(movieId),
+                                             title = as.character(title),
+                                             genres = as.character(genres))
+  
+  
+  movielens <- left_join(ratings, movies, by = "movieId")
+  
+  # Validation set will be 10% of MovieLens data
+  set.seed(1, sample.kind="Rounding") 
+  test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+  edx <- movielens[-test_index,]
+  temp <- movielens[test_index,]
+  
+  # Make sure userId and movieId in validation set are also in edx set
+  validation <- temp %>% 
+    semi_join(edx, by = "movieId") %>%
+    semi_join(edx, by = "userId")
+  
+  # Add rows removed from validation set back into edx set
+  removed <- anti_join(temp, validation)
+  edx <- rbind(edx, removed)
+  
+  #remove all temp files
+  rm(dl, ratings, movies, test_index, temp, movielens, removed)
+  
+} else {
+  load("MovieLens.RData")
+}
+
+```
+
+The following lines were added to save a copy of the dataset to a local folder to prevent having to download again.
+
+```{r save local files}
+if(!file.exists("MovieLens.RData"))
+{
+save(edx, validation, file = "MovieLens.RData")
+}
+```
+
+
+# 2 Analysis
+
+## 2.1  Data verification
+
+First we need to examine the layout and nature of the data. Each entry in the dataset represents individual movie ratings with a unique userId for each person making the rating, a movieId matched to the movie titles, a rating from 0-5 (with 0 being poor and 5 being excellent), a genre (or combination of a number of genres) and a timestamp representing the date and time when the rating was given.
+
+```{r viewdata}
+head(edx)
+```
+A potential additional useful variable to consider could be the year that the movie was released. We add the extra column by extracting the year from the title.
+
+```{r addyear}
+edx <- edx %>% mutate(year = as.numeric(str_sub(title,-5,-2)))
+validation <- validation %>% mutate(year = as.numeric(str_sub(title,-5,-2)))
+head(edx)
+```
+
+As part of the data cleanup process we should check for incomplete records starting with a check for NAs in the ratings and newly created year columns. There are no NAs in the dataset.
+
+```{r checkNA}
+sum(is.na(edx$rating))
+sum(is.na(edx$year))
+```
+
+The distribution of the ratings can also be viewed to check for 0 ratings and it will also give us a feel for the data. We can see that the ratings range from 0-5, in half point increments with 4.0 the most prevalent rating given. 
+
+```{r check rating distribution}
+edx %>%
+  group_by(rating) %>%
+  ggplot(aes(rating)) +
+  geom_bar() +
+  xlab("Rating") +
+  ylab("No. Ratings") +
+  ggtitle("Number of Ratings")
+```
+
+We can also draw a summary of the data with the following code.
+
+```{r check summary}
+summary(edx)
+```
+
+The data contains individual ratings for 69,878 unique users and 10,677 unique movies.
+
+```{r distinct movies users}
+edx %>% 
+  summarize(n_users = n_distinct(userId),
+            n_movies = n_distinct(movieId))
+```
+the movies in the dataset cover the period of 93 years, from 1915 to 2008 
+
+```{r dno of years}
+min(edx$year) 
+max(edx$year) 
+max(edx$year) - min(edx$year)
+```
+
+In order to determine which potential parameters we might be able to use in our modeling we can investigate the number of ratings per variable and their distributions.  
+  
+Looking at the count of users plotted against the number of ratings we can see that not all users make the same number of ratings which could skew the predictions we make. We will therefore include a bias correction for the number of ratings per user.
+
+```{r ratings per user}
+edx %>%
+  dplyr::count(userId) %>%
+  ggplot(aes(n)) +
+  geom_histogram(bins = 30) +
+  scale_x_log10() +
+  xlab("No. Users") +
+  ylab("No. Ratings") +
+  ggtitle("Number of Ratings per User")
+```
+
+If we consider the count of movies plotted against the number of ratings we can also draw the observation that some of the less popular movies are rated very little compared to some of the more mainstream ones. We should therefore consider making some kind of correction based on the number of ratings per movie.
+
+```{r ratings per movie}
+edx %>%
+  dplyr::count(movieId) %>%
+  ggplot(aes(n)) +
+  geom_histogram(bins = 30) +
+  scale_x_log10() +
+  xlab("No. Movies") +
+  ylab("No. Ratings") +
+  ggtitle("Number of Ratings per Movie")
+```
+
+The plot below illustrates the potential effect of time on the rating. It seems that the effect of the timestamp is not that notable to include it as a parameter in the prediction model and it will therefore not be considered further.  
+
+```{r length of time between ratings}
+edx %>%
+  mutate(date = round_date(as_datetime(timestamp), unit = "week")) %>%
+  group_by(date) %>%
+  summarize(rating = mean(rating)) %>%
+  ggplot(aes(date, rating)) +
+  geom_point() +
+  geom_smooth(method = "loess", span = 0.5, method.args = list(degree=1)) +
+  ggtitle("Average ratings by time unit (week)")
+```
+
+If we consider the effect of the year of release on the potential rating then we see from the plot below that there is a marked decrease in the mean rating for more modern movies. For this reason we will include a bias parameter in our model that will adjust for year of release.
+
+```{r check year}
+edx %>% group_by(year) %>%
+  summarize(rating = mean(rating)) %>%
+  ggplot(aes(year, rating)) +
+  geom_point() +
+  geom_smooth(method = "loess", span = 0.5, method.args = list(degree=1)) +
+  ggtitle("Average ratings by year of release")
+```
+
+Plotting the number of ratings per genre on a histogram also illustrates another potential source of bias on the predicted ratings. we can see that some genres have very few ratings and we need to take some form of adjustment into account in our final model.
+
+```{r check genres}
+edx %>%
+  dplyr::count(genres) %>%
+  ggplot(aes(n)) +
+  geom_histogram(bins = 30) +
+  scale_x_log10() +
+  xlab("No. Genres") +
+  ylab("No. Ratings") +
+  ggtitle("Number of Ratings per Genre")
+```
+
+
+We can use the following function in our modeling to test the error loss in each of our predictions. We will use the residual mean squared error (RMSE) between the actual ratings in the validation dataset and our predictions.  
+
+```{r rmse function}
+RMSE <- function(true_ratings, predicted_ratings){
+  sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+```
+
+
+
+
+
+section that explains the process and techniques used, including data cleaning, data exploration and visualization, insights gained, and your modeling approach
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+# 3 Results
+
+a results section that presents the modeling results and discusses the model performance
+
+# 4 Conclusion
+
+a conclusion section that gives a brief summary of the report, its limitations and future work
