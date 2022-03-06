@@ -238,15 +238,17 @@ rmse_results <- rmse_results %>% add_row(tibble_row(method = "Movie effect model
 
 edx %>% 
   group_by(userId) %>% 
-  #filter(n()>=100) %>%
   summarize(b_u = mean(rating)) %>% 
   ggplot(aes(b_u)) + 
   geom_histogram(bins = 30, color = "black")
 
+#calculate the bias to be added to the mean
 user_avgs <- edx %>% 
   left_join(movie_avgs, by='movieId') %>%
   group_by(userId) %>%
   summarize(b_u = mean(rating - mu - b_i))
+
+qplot(b_u, data = user_avgs, bins = 10, color = I("black"))
 
 #now make the predictions
 predicted_ratings <- validation %>% 
@@ -269,11 +271,14 @@ edx %>%
   ggplot(aes(b_y)) + 
   geom_histogram(bins = 30, color = "black")
 
+#calcualte the bias to be added to the mean
 year_avgs <- edx %>% 
   left_join(movie_avgs, by='movieId') %>%
   left_join(user_avgs, by='userId') %>%
   group_by(year) %>%
   summarize(b_y = mean(rating - mu - b_i - b_u))
+
+qplot(b_y, data = year_avgs, bins = 10, color = I("black"))
 
 #now make the predictions
 predicted_ratings <- validation %>% 
@@ -285,7 +290,39 @@ predicted_ratings <- validation %>%
 year_model_rmse <- RMSE(predicted_ratings, validation$rating)
 
 #save results to summary table
-rmse_results <- rmse_results %>% add_row(tibble_row(method = "Release year model", RMSE = user_model_rmse))
+rmse_results <- rmse_results %>% add_row(tibble_row(method = "Release year model", RMSE = year_model_rmse))
+#========================================================================
+#model for effect of genre
+#========================================================================
+
+edx %>% 
+  group_by(genres) %>% 
+  summarize(b_g = mean(rating)) %>% 
+  ggplot(aes(b_g)) + 
+  geom_histogram(bins = 30, color = "black")
+
+#calculate the bias to be added to the mean
+genre_avgs <- edx %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(year_avgs, by='year') %>%
+  group_by(genres) %>%
+  summarize(b_g = mean(rating - mu - b_i - b_u - b_y))
+
+qplot(b_g, data = genre_avgs, bins = 10, color = I("black"))
+
+#now make the predictions
+predicted_ratings <- validation %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(year_avgs, by='year') %>%
+  left_join(genre_avgs, by='genres') %>%
+  mutate(pred = mu + b_i + b_u + b_y + b_g) %>%
+  pull(pred)
+genre_model_rmse <- RMSE(predicted_ratings, validation$rating)
+
+#save results to summary table
+rmse_results <- rmse_results %>% add_row(tibble_row(method = "Genre model", RMSE = genre_model_rmse))
 
 #========================================================================
 #regularising
